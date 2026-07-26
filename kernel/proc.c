@@ -228,6 +228,8 @@ userinit(void)
 
   p->state = RUNNABLE;
 
+  p->syscall_mask = 0;
+
   release(&p->lock);
 }
 
@@ -257,6 +259,8 @@ int
 kfork(void)
 {
   int i, pid;
+  // p - parent process
+  // np - child process
   struct proc *np;
   struct proc *p = myproc();
 
@@ -275,7 +279,7 @@ kfork(void)
 
   // copy saved user registers.
   *(np->trapframe) = *(p->trapframe);
-
+  np->syscall_mask = p->syscall_mask;
   // Cause fork to return 0 in the child.
   np->trapframe->a0 = 0;
 

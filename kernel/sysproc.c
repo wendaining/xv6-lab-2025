@@ -105,3 +105,12 @@ sys_uptime(void)
   release(&tickslock);
   return xticks;
 }
+
+uint64
+sys_interpose(void)
+{
+  int mask; // 在内核栈中准备一个变量
+  argint(0, &mask); // 取得用户传入的第 0 个参数
+  myproc()->syscall_mask = mask; // 把限制保存到当前进程
+  return 0;
+}
