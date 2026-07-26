@@ -1,0 +1,30 @@
+Looking at the backtrace output, which function called syscall?
+
+usertrap() at kernel/trap.c:68
+
+What is the value of p->trapframe->a7 and what does that value represent? (Hint: look at user/init.c, the first user program xv6 starts, and its compiled assembly user/init.asm.)
+
+$4 = 0xf, 当前进程 p 进入内核时，保存下来的用户态寄存器 a7 的值。0xf = 15，而 SYS_OPEN = 15，所以代表 open 系统调用。
+
+What was the previous mode that the CPU was in?
+
+用户态
+
+Write down the assembly instruction the kernel is panicing at. Which register corresponds to the variable num?
+
+得到：scause=0xd sepc=0x80001cf8 stval=0x0
+panic: kerneltrap
+再得到：
+4410:    80001cf8:      00002683                lw      a3,0(zero) # 0 <_entry-0x80000000>
+a3 对应 num
+
+Why does the kernel crash? Hint: look at figure 3-3 in the text; is address 0 mapped in the kernel address space? Is that confirmed by the value in scause above?
+
+代码 *(int *)0 要求 CPU 从虚拟地址 0 读取数据，但内核页表没有映射地址 0，于是发生 page fault。
+
+What is the name of the process that was running when the kernel paniced? What is its process id (pid)?
+
+(gdb)p p->name
+$1 "init",\000'<repeats 11 times>
+(gdb)p/d p->pid
+$2=1
