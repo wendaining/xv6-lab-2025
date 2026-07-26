@@ -110,7 +110,10 @@ uint64
 sys_interpose(void)
 {
   int mask; // 在内核栈中准备一个变量
+  char allowed_path[MAXPATH];
   argint(0, &mask); // 取得用户传入的第 0 个参数
+  argstr(1, allowed_path, MAXPATH);
   myproc()->syscall_mask = mask; // 把限制保存到当前进程
+  memmove(myproc()->allowed_path, allowed_path, MAXPATH);
   return 0;
 }

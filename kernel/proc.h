@@ -105,4 +105,5 @@ struct proc {
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
   int syscall_mask;            // for syscall interpose
+  char allowed_path[MAXPATH];  // allowed path for sandbox
 };

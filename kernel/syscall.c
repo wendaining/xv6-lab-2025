@@ -141,9 +141,18 @@ syscall(void)
   if(num > 0 && num < NELEM(syscalls) && syscalls[num]) {
     // Use num to lookup the system call function for num, call it,
     // and store its return value in p->trapframe->a0
-    if (p->syscall_mask & (1 << num)) {
+    int blocked = p->syscall_mask & (1 << num);
+    if (blocked && (num == SYS_exec || num == SYS_open)) {
+      char path[MAXPATH];
+      if (argstr(0, path, MAXPATH) != -1 && !strncmp(path, p->allowed_path, MAXPATH)) {
+        blocked = 0;
+      }
+    }
+    if (blocked) {
+      printf("denied syscall %d\n", num);
       p->trapframe->a0 = -1;
-    } else {
+    }
+    else {
       p->trapframe->a0 = syscalls[num]();
     }
   } else {
