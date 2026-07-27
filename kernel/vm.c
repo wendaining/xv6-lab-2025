@@ -140,11 +140,32 @@ walkaddr(pagetable_t pagetable, uint64 va)
   return pa;
 }
 
-
 #if defined(LAB_PGTBL) || defined(SOL_MMAP) || defined(SOL_COW)
 void
-vmprint(pagetable_t pagetable) {
-  // your code here
+vmprint_recur(pagetable_t pagetable, int level, uint64 va)
+{
+  for (int i = 0; i < 512; ++i) {
+    pte_t pte = pagetable[i];
+    if (pte & PTE_V) { // is a valid PTE
+      // 这里记得强转 i
+      uint64 newva = va | ((uint64)i << (uint64)(12 + 9 * level));
+      for (int j = 0; j <= 2 - level; j++) {
+        printf(" ..");
+      }
+      printf("%p: pte %p pa %p\n", (void *)newva, (void *)pte, (void *)PTE2PA(pte));
+      if ((pte & (PTE_R|PTE_W|PTE_X)) == 0) {
+        vmprint_recur((pagetable_t)PTE2PA(pte), level - 1, newva);
+      }
+    }
+  }
+}
+
+void
+vmprint(pagetable_t pagetable)
+{
+  printf("page table %p\n", pagetable);
+  // ！！从 2 开始 而不是从 1 开始！！
+  vmprint_recur(pagetable, 2, 0);
 }
 #endif
 
