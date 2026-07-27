@@ -214,6 +214,7 @@ proc_pagetable(struct proc *p)
   if(mappages(pagetable, USYSCALL, PGSIZE,
               (uint64)(p->usyscall), PTE_R | PTE_U) < 0){
     uvmunmap(pagetable, TRAPFRAME, 1, 0);
+    uvmunmap(pagetable, TRAMPOLINE, 1, 0); // !!!
     uvmfree(pagetable, 0);
     return 0;
   }
@@ -229,11 +230,6 @@ proc_freepagetable(pagetable_t pagetable, uint64 sz)
   uvmunmap(pagetable, TRAMPOLINE, 1, 0);
   uvmunmap(pagetable, TRAPFRAME, 1, 0);
   uvmunmap(pagetable, USYSCALL, 1, 0);
-  // TODO: 这里其实我不太理解上面那一行的
-  // uvmunmap(pagetable, TRAPFRAME, 1, 0);
-  // 和这里的 uvmunmap(pagetable, USYSCALL, 1, 0);
-  // 有什么区别，因为我看 uvmunmap 的意思是，从第二个参数（va）开始解映射
-  // 其实我能理解 proc_freepagetable 这里的写法，但是理解不了上面为什么非得是写成「原本应该在的位置的上面一个」
   uvmfree(pagetable, sz);
 }
 
