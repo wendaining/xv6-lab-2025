@@ -148,7 +148,7 @@ vmprint_recur(pagetable_t pagetable, int level, uint64 va)
     pte_t pte = pagetable[i];
     if (pte & PTE_V) { // is a valid PTE
       // 这里记得强转 i
-      uint64 newva = va | ((uint64)i << (uint64)(12 + 9 * level));
+      uint64 newva = va | ((uint64)i << PXSHIFT(level));
       for (int j = 0; j <= 2 - level; j++) {
         printf(" ..");
       }
