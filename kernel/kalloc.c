@@ -10,6 +10,7 @@
 #include "defs.h"
 
 void freerange(void *pa_start, void *pa_end);
+void freerange_super(void *pa_start, void *pa_end);
 
 extern char end[]; // first address after kernel.
                    // defined by kernel.ld.
@@ -23,11 +24,44 @@ struct {
   struct run *freelist;
 } kmem;
 
+struct {
+  struct spinlock lock;
+  struct run *freelist;
+} ksupermem;
+
 void
 kinit()
 {
   initlock(&kmem.lock, "kmem");
-  freerange(end, (void*)PHYSTOP);
+  freerange_super(end, (void*)(SUPERPGSIZE * SUPERPGAMOUNT * 8));
+  freerange((void*)(end + SUPERPGSIZE * SUPERPGAMOUNT * 8) , (void*)PHYSTOP);
+}
+
+void freerange_super(void *pa_start, void *pa_end)
+{
+  char *p;
+  p = (char*)SUPERPGROUNDUP((uint64)pa_start);
+  for(; p + SUPERPGSIZE <= (char*)pa_end; p += SUPERPGSIZE) {
+    ksuperfree(p);
+  }
+}
+
+void
+ksuperfree(void *pa)
+{
+  struct run *r;
+  if(((uint64)pa % SUPERPGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
+    panic("kfree");
+
+  // Fill with junk to catch dangling refs.
+  memset(pa, 1, SUPERPGSIZE);
+
+  r = (struct run*)pa;
+
+  acquire(&ksupermem.lock);
+  r->next = ksupermem.freelist;
+  ksupermem.freelist = r;
+  release(&ksupermem.lock);
 }
 
 void
@@ -60,7 +94,7 @@ kfree(void *pa)
   r->next = kmem.freelist;
   kmem.freelist = r;
   release(&kmem.lock);
-}
+} 
 
 // Allocate one 4096-byte page of physical memory.
 // Returns a pointer that the kernel can use.
@@ -79,4 +113,16 @@ kalloc(void)
   if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk
   return (void*)r;
+}
+
+void *
+superalloc(void)
+{
+  struct run *r;
+}
+
+void
+superfree(void *pa)
+{
+
 }
