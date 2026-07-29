@@ -247,6 +247,58 @@ uvmcreate()
   return pagetable;
 }
 
+
+// Split a 2MB superpage into 512 individual 4KB pages.
+// Pages within [unmap_start, unmap_end) are left unmapped (L0[j]=0).
+// All other pages within the superpage are allocated new 4KB pages
+// with data copied from the original 2MB block.
+// The original 2MB physical block is freed.
+static void
+split_superpage(pagetable_t pagetable, uint64 sp_start,
+                uint64 unmap_start, uint64 unmap_end)
+{
+  if (pagesize(pagetable, sp_start) != SUPERPGSIZE) {
+    panic("not a super page");
+  }
+  // Locate the L1 leaf PTE
+  pte_t *l2 = &pagetable[PX(2, sp_start)];
+  pagetable_t l1 = (pagetable_t)PTE2PA(*l2);
+  pte_t *l1_pte = &l1[PX(1, sp_start)];
+
+  uint64 sp_pa = PTE2PA(*l1_pte);
+  int flags = PTE_FLAGS(*l1_pte);
+  uint64 sp_end = sp_start + SUPERPGSIZE;
+
+  // Clamp unmap_end to superpage boundary
+  unmap_end = unmap_end < sp_end ? unmap_end : sp_end;
+
+  // Allocate a new L0 page table
+  pagetable_t l0 = (pagetable_t)kalloc();
+  if(l0 == 0)
+    panic("split_superpage");
+  memset(l0, 0, PGSIZE);
+
+  // Populate L0: skip pages in [unmap_start, unmap_end),
+  // allocate+copy all others
+  for(int j = 0; j < 512; j++){
+    uint64 page_va = sp_start + j * PGSIZE;
+    if(page_va >= unmap_start && page_va < unmap_end)
+      continue;  // being unmapped — L0[j] stays 0
+
+    char *new_page = kalloc();
+    if(new_page == 0)
+      panic("split_superpage");
+    memmove(new_page, (char*)(sp_pa + j * PGSIZE), PGSIZE);
+    l0[j] = PA2PTE(new_page) | flags | PTE_V;
+  }
+
+  // Replace L1 leaf PTE with a branch PTE pointing to the new L0 table
+  *l1_pte = PA2PTE(l0) | PTE_V;
+
+  // Free the original 2MB block
+  superfree((void*)sp_pa);
+}
+
 // Remove npages of mappings starting from va. va must be
 // page-aligned. It's OK if the mappings don't exist.
 // Optionally free the physical memory.
@@ -255,23 +307,51 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
 {
   uint64 a;
   pte_t *pte;
-  int sz = PGSIZE;
 
   if((va % PGSIZE) != 0)
     panic("uvmunmap: not aligned");
 
-  for(a = va; a < va + npages*PGSIZE; a += sz){
-    if((pte = walk(pagetable, a, 0)) == 0) // leaf page table entry allocated?
+  for(a = va; a < va + npages*PGSIZE; a += PGSIZE){
+    if((pte = walk(pagetable, a, 0)) == 0)
       continue;
-    if((*pte & PTE_V) == 0)  // has physical page been allocated?
+    if((*pte & PTE_V) == 0)
       continue;
-    sz = PGSIZE;
+
     if(PTE_FLAGS(*pte) == PTE_V)
       panic("uvmunmap: not a leaf");
-    if(do_free){
-      uint64 pa = PTE2PA(*pte);
-      kfree((void*)pa);
+
+    if(pagesize(pagetable, a) == SUPERPGSIZE){
+      uint64 sp_start = SUPERPGROUNDDOWN(a);
+      uint64 sp_end = sp_start + SUPERPGSIZE;
+      uint64 unmap_end = va + npages * PGSIZE;
+
+      if(a == sp_start && sp_end <= unmap_end){
+        // Entire superpage falls within unmap range — release as a whole
+        if(do_free) {
+          superfree((void*)PTE2PA(*pte));
+        }
+        *pte = 0;
+        a += SUPERPGSIZE - PGSIZE;  // skip the whole 2MB (loop does +PGSIZE)
+        continue;
+      }
+
+      // Partial unmapping — split the superpage into 4KB pages.
+      if(do_free){
+        split_superpage(pagetable, sp_start, a, unmap_end);
+        // After split: pages in [a, unmap_end) have L0[j]=0 (already unmapped)
+        pte = walk(pagetable, a, 0);
+        if(pte == 0 || (*pte & PTE_V) == 0)
+          continue;
+        // a is at a retained page (won't normally happen — fall through)
+      }
+      // do_free==0 for partial superpage: just skip (this path is never
+      // taken in practice — only trampoline/trapframe use do_free=0,
+      // and they are 4KB pages)
     }
+
+    // Regular 4KB page (or split superpage page)
+    if(do_free)
+      kfree((void*)PTE2PA(*pte));
     *pte = 0;
   }
 }

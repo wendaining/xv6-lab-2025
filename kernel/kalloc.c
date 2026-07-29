@@ -10,10 +10,12 @@
 #include "defs.h"
 
 void freerange(void *pa_start, void *pa_end);
-void freerange_super(void *pa_start, void *pa_end);
 
 extern char end[]; // first address after kernel.
                    // defined by kernel.ld.
+
+int cnt_superpage = 0;
+                   
 
 struct run {
   struct run *next;
@@ -33,44 +35,24 @@ void
 kinit()
 {
   initlock(&kmem.lock, "kmem");
-  freerange_super(end, (void*)(SUPERPGSIZE * SUPERPGAMOUNT * 8));
-  freerange((void*)(end + SUPERPGSIZE * SUPERPGAMOUNT * 8) , (void*)PHYSTOP);
+  initlock(&ksupermem.lock, "ksupermem");
+  freerange(end, (void*)PHYSTOP);
 }
 
-void freerange_super(void *pa_start, void *pa_end)
-{
-  char *p;
-  p = (char*)SUPERPGROUNDUP((uint64)pa_start);
-  for(; p + SUPERPGSIZE <= (char*)pa_end; p += SUPERPGSIZE) {
-    ksuperfree(p);
-  }
-}
-
-void
-ksuperfree(void *pa)
-{
-  struct run *r;
-  if(((uint64)pa % SUPERPGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
-    panic("kfree");
-
-  // Fill with junk to catch dangling refs.
-  memset(pa, 1, SUPERPGSIZE);
-
-  r = (struct run*)pa;
-
-  acquire(&ksupermem.lock);
-  r->next = ksupermem.freelist;
-  ksupermem.freelist = r;
-  release(&ksupermem.lock);
-}
 
 void
 freerange(void *pa_start, void *pa_end)
 {
   char *p;
   p = (char*)PGROUNDUP((uint64)pa_start);
-  for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE)
-    kfree(p);
+  for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE) {
+    if ((uint64)p % SUPERPGSIZE == 0 && p + SUPERPGSIZE <= (char*)pa_end && cnt_superpage < SUPERPGAMOUNT) {
+      superfree(p);
+      p += SUPERPGSIZE - PGSIZE;
+    } else {
+      kfree(p);
+    }
+  }
 }
 
 // Free the page of physical memory pointed at by pa,
@@ -96,6 +78,26 @@ kfree(void *pa)
   release(&kmem.lock);
 } 
 
+void
+superfree(void *pa)
+{
+  struct run *r;
+  if ((uint64)pa % SUPERPGSIZE !=0 || (char*)pa < end || (uint64)pa >= PHYSTOP) {
+    panic("superfree");
+  }
+
+  // Fill with junk to catch dangling refs.
+  memset(pa, 2, SUPERPGSIZE);
+
+  r = (struct run*)pa;
+
+  acquire(&ksupermem.lock);
+  r->next = ksupermem.freelist;
+  ksupermem.freelist = r;
+  cnt_superpage++;
+  release(&ksupermem.lock);
+}
+
 // Allocate one 4096-byte page of physical memory.
 // Returns a pointer that the kernel can use.
 // Returns 0 if the memory cannot be allocated.
@@ -119,10 +121,17 @@ void *
 superalloc(void)
 {
   struct run *r;
-}
 
-void
-superfree(void *pa)
-{
+  acquire(&ksupermem.lock);
+  r = ksupermem.freelist;
+  if (r) {
+    ksupermem.freelist = r->next;
+  }
+  release(&ksupermem.lock);
 
+  if (r) {
+    memset((char*)r, 6, SUPERPGSIZE);
+    cnt_superpage--;
+  }
+  return (void*)r;
 }
