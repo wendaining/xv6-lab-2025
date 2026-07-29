@@ -117,6 +117,23 @@ walk(pagetable_t pagetable, uint64 va, int alloc)
   return &pagetable[PX(0, va)];
 }
 
+// return the page size of a specific pte
+int
+pagesize(pagetable_t pagetable, uint64 va)
+{
+  pte_t *pte;
+  pte = &pagetable[PX(2, va)];
+  if ((*pte & PTE_V) == 0) {
+    return PGSIZE;
+  }
+  pagetable_t l1 = (pagetable_t)PTE2PA(*pte);
+  pte = &l1[PX(1, va)];
+  if ((*pte & PTE_V) && PTE_LEAF(*pte)) {
+    return SUPERPGSIZE;
+  }
+  return PGSIZE;
+}
+
 // Look up a virtual address, return the physical address,
 // or 0 if not mapped.
 // Can only be used to look up user pages.
