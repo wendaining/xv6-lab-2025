@@ -121,6 +121,9 @@ walk(pagetable_t pagetable, uint64 va, int alloc)
 int
 pagesize(pagetable_t pagetable, uint64 va)
 {
+  if (va % SUPERPGSIZE != 0) {
+    return PGSIZE;
+  }
   pte_t *pte;
   pte = &pagetable[PX(2, va)];
   if ((*pte & PTE_V) == 0) {
@@ -248,6 +251,30 @@ uvmcreate()
 }
 
 
+// Create a 2MB superpage mapping at L1.
+// va and pa must be 2MB-aligned. Returns 0 on success, -1 on failure.
+static int
+map_superpage(pagetable_t pagetable, uint64 va, uint64 pa, int perm)
+{
+  // Ensure the L1 page table exists (L2 already points to it)
+  pte_t *l2 = &pagetable[PX(2, va)];
+  pagetable_t l1;
+  if(*l2 & PTE_V){
+    l1 = (pagetable_t)PTE2PA(*l2);
+  } else {
+    if((l1 = (pagetable_t)kalloc()) == 0)
+      return -1;
+    memset(l1, 0, PGSIZE);
+    *l2 = PA2PTE(l1) | PTE_V;
+  }
+
+  pte_t *l1_pte = &l1[PX(1, va)];
+  if(*l1_pte & PTE_V)
+    return -1;  // already mapped
+  *l1_pte = PA2PTE(pa) | perm | PTE_V;  // R/W/X bits → hardware sees a leaf
+  return 0;
+}
+
 // Split a 2MB superpage into 512 individual 4KB pages.
 // Pages within [unmap_start, unmap_end) are left unmapped (L0[j]=0).
 // All other pages within the superpage are allocated new 4KB pages
@@ -258,19 +285,21 @@ split_superpage(pagetable_t pagetable, uint64 sp_start,
                 uint64 unmap_start, uint64 unmap_end)
 {
   if (pagesize(pagetable, sp_start) != SUPERPGSIZE) {
-    panic("split_superpage");
+    printf("split_sp: sp_start=%lx unmap_start=%lx unmap_end=%lx\n",
+           sp_start, unmap_start, unmap_end);
+    panic("split_sp: not superpage");
   }
   uint64 sp_end = sp_start + SUPERPGSIZE;
   unmap_end = unmap_end < sp_end ? unmap_end : sp_end;
   pte_t *l2_pte = &pagetable[PX(2, sp_start)];
   pagetable_t l1 = (pagetable_t)PTE2PA(*l2_pte);
-  pte_t *sp_pte = &l1[PX(1, sp_start)]; 
+  pte_t *sp_pte = &l1[PX(1, sp_start)];
   uint64 sp_pa = PTE2PA(*sp_pte);
   int flags = PTE_FLAGS(*sp_pte);
 
   pagetable_t l0 = (pagetable_t)kalloc();
   if (l0 == 0) {
-    panic("split_superpage");
+    panic("split_sp: kalloc l0");
   }
   memset((void*)l0, 0, PGSIZE);
   for (int i = 0; i < 512; ++i) {
@@ -280,7 +309,7 @@ split_superpage(pagetable_t pagetable, uint64 sp_start,
     }
     uint64 new_page = (uint64) kalloc();
     if (new_page == 0) {
-      panic("split_superpage");
+      panic("split_sp: kalloc page");
     }
     memmove((void*)new_page, (void*)(sp_pa + i * PGSIZE), PGSIZE);
     l0[i] = PA2PTE(new_page) | flags | PTE_V;
@@ -328,18 +357,16 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
       // Partial unmapping — split the superpage into 4KB pages.
       if(do_free){
         split_superpage(pagetable, sp_start, a, unmap_end);
-        // After split: pages in [a, unmap_end) have L0[j]=0 (already unmapped)
+        // After split the L1 PTE is now a branch, not a leaf.
+        // Re-walk to get the L0 PTE for the current address.
         pte = walk(pagetable, a, 0);
         if(pte == 0 || (*pte & PTE_V) == 0)
-          continue;
-        // a is at a retained page (won't normally happen — fall through)
+          continue;  // page was in unmap range, already unmapped by split
+        // a is at a retained page — fall through to 4KB path
       }
-      // do_free==0 for partial superpage: just skip (this path is never
-      // taken in practice — only trampoline/trapframe use do_free=0,
-      // and they are 4KB pages)
     }
 
-    // Regular 4KB page (or split superpage page)
+    // Regular 4KB page
     if(do_free)
       kfree((void*)PTE2PA(*pte));
     *pte = 0;
@@ -354,7 +381,7 @@ uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz, int xperm)
 {
   char *mem;
   uint64 a;
-  int sz;
+  int sz = PGSIZE;
 
   if(newsz < oldsz)
     return oldsz;
@@ -362,6 +389,26 @@ uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz, int xperm)
   oldsz = PGROUNDUP(oldsz);
   for(a = oldsz; a < newsz; a += sz){
     sz = PGSIZE;
+
+    // Try superpage if the remaining range is at least 2MB and va is 2MB-aligned
+    if((newsz - a) >= SUPERPGSIZE && (a % SUPERPGSIZE) == 0){
+      mem = superalloc();
+      if(mem != 0){
+        sz = SUPERPGSIZE;
+#ifndef LAB_SYSCALL
+        memset(mem, 0, sz);
+#endif
+        if(map_superpage(pagetable, a, (uint64)mem, PTE_R|PTE_U|xperm) != 0){
+          superfree(mem);
+          uvmdealloc(pagetable, a, oldsz);
+          return 0;
+        }
+        continue;
+      }
+      // superalloc failed — fall through to 4KB allocation below
+    }
+
+    // Regular 4KB page
     mem = kalloc();
     if(mem == 0){
       uvmdealloc(pagetable, a, oldsz);
@@ -369,7 +416,7 @@ uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz, int xperm)
     }
 #ifndef LAB_SYSCALL
     memset(mem, 0, sz);
- #endif
+#endif
     if(mappages(pagetable, a, sz, (uint64)mem, PTE_R|PTE_U|xperm) != 0){
       kfree(mem);
       uvmdealloc(pagetable, a, oldsz);
@@ -442,22 +489,35 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   uint flags;
   char *mem;
   int szinc = PGSIZE;
-
   for(i = 0; i < sz; i += szinc){
     if((pte = walk(old, i, 0)) == 0)
       continue;
-    if((*pte & PTE_V) == 0) {
+    if((*pte & PTE_V) == 0)
       continue;
-    }
-    szinc = PGSIZE;
+
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
-      goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
-      goto err;
+
+    if(pagesize(old, i) == SUPERPGSIZE){
+      szinc = SUPERPGSIZE;
+
+      if((mem = superalloc()) == 0) {
+        goto err;
+      }
+      memmove(mem, (char*)pa, SUPERPGSIZE);
+      if(map_superpage(new, i, (uint64)mem, flags) != 0){
+        superfree(mem);
+        goto err;
+      }
+    } else {
+      szinc = PGSIZE;
+      if((mem = kalloc()) == 0)
+        goto err;
+      memmove(mem, (char*)pa, PGSIZE);
+      if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
+        kfree(mem);
+        goto err;
+      }
     }
   }
   return 0;
