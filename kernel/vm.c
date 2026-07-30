@@ -258,44 +258,34 @@ split_superpage(pagetable_t pagetable, uint64 sp_start,
                 uint64 unmap_start, uint64 unmap_end)
 {
   if (pagesize(pagetable, sp_start) != SUPERPGSIZE) {
-    panic("not a super page");
+    panic("split_superpage");
   }
-  // Locate the L1 leaf PTE
-  pte_t *l2 = &pagetable[PX(2, sp_start)];
-  pagetable_t l1 = (pagetable_t)PTE2PA(*l2);
+  uint64 sp_end = sp_start + SUPERPGSIZE;
+  unmap_end = unmap_end < sp_end ? unmap_end : sp_end;
+  pte_t *l2_pte = &pagetable[PX(2, sp_start)];
+  pagetable_t l1 = (pagetable_t)l2_pte;
   pte_t *l1_pte = &l1[PX(1, sp_start)];
-
   uint64 sp_pa = PTE2PA(*l1_pte);
   int flags = PTE_FLAGS(*l1_pte);
-  uint64 sp_end = sp_start + SUPERPGSIZE;
 
-  // Clamp unmap_end to superpage boundary
-  unmap_end = unmap_end < sp_end ? unmap_end : sp_end;
-
-  // Allocate a new L0 page table
   pagetable_t l0 = (pagetable_t)kalloc();
-  if(l0 == 0)
+  if (l0 == 0) {
     panic("split_superpage");
-  memset(l0, 0, PGSIZE);
-
-  // Populate L0: skip pages in [unmap_start, unmap_end),
-  // allocate+copy all others
-  for(int j = 0; j < 512; j++){
-    uint64 page_va = sp_start + j * PGSIZE;
-    if(page_va >= unmap_start && page_va < unmap_end)
-      continue;  // being unmapped — L0[j] stays 0
-
-    char *new_page = kalloc();
-    if(new_page == 0)
-      panic("split_superpage");
-    memmove(new_page, (char*)(sp_pa + j * PGSIZE), PGSIZE);
-    l0[j] = PA2PTE(new_page) | flags | PTE_V;
   }
-
-  // Replace L1 leaf PTE with a branch PTE pointing to the new L0 table
-  *l1_pte = PA2PTE(l0) | PTE_V;
-
-  // Free the original 2MB block
+  memset((void*)l0, 0, PGSIZE);
+  for (int i = 0; i < 512; i++) {
+    uint64 page_va = sp_start + i * PGSIZE;
+    if (page_va >= unmap_start && page_va < unmap_end) {
+      continue;
+    }
+    uint64 new_page = (uint64)kalloc();
+    if (new_page == 0) {
+      panic("split_superpage");
+    }
+    memmove((void*)new_page, sp_pa + i * PGSIZE, PGSIZE);
+    l0[i] = PA2PTE(new_page) | flags | PTE_V;
+  }
+  l1_pte = PA2PTE(l0) | PTE_V;
   superfree((void*)sp_pa);
 }
 
