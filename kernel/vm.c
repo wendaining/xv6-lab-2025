@@ -262,7 +262,8 @@ split_superpage(pagetable_t pagetable, uint64 sp_start,
   }
   uint64 sp_end = sp_start + SUPERPGSIZE;
   unmap_end = unmap_end < sp_end ? unmap_end : sp_end;
-  pagetable_t l1 = (pagetable_t)(&pagetable[PX(2, sp_start)]);
+  pte_t *l2_pte = &pagetable[PX(2, sp_start)];
+  pagetable_t l1 = (pagetable_t)PTE2PA(*l2_pte);
   pte_t *sp_pte = &l1[PX(1, sp_start)]; 
   uint64 sp_pa = PTE2PA(*sp_pte);
   int flags = PTE_FLAGS(*sp_pte);
@@ -282,10 +283,10 @@ split_superpage(pagetable_t pagetable, uint64 sp_start,
       panic("split_superpage");
     }
     memmove((void*)new_page, (void*)(sp_pa + i * PGSIZE), PGSIZE);
-    l0[i] = PTE2PA(new_page) | flags | PTE_V;
+    l0[i] = PA2PTE(new_page) | flags | PTE_V;
   }
-  sp_pte = PA2PTE(l0) | PTE_V;
-  superfree((void*)sp_start);
+  *sp_pte = PA2PTE(l0) | PTE_V;
+  superfree((void*)sp_pa);
 }
 
 // Remove npages of mappings starting from va. va must be
