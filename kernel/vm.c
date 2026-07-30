@@ -121,9 +121,6 @@ walk(pagetable_t pagetable, uint64 va, int alloc)
 int
 pagesize(pagetable_t pagetable, uint64 va)
 {
-  if (va % SUPERPGSIZE != 0) {
-    return PGSIZE;
-  }
   pte_t *pte;
   pte = &pagetable[PX(2, va)];
   if ((*pte & PTE_V) == 0) {
@@ -285,8 +282,6 @@ split_superpage(pagetable_t pagetable, uint64 sp_start,
                 uint64 unmap_start, uint64 unmap_end)
 {
   if (pagesize(pagetable, sp_start) != SUPERPGSIZE) {
-    printf("split_sp: sp_start=%lx unmap_start=%lx unmap_end=%lx\n",
-           sp_start, unmap_start, unmap_end);
     panic("split_sp: not superpage");
   }
   uint64 sp_end = sp_start + SUPERPGSIZE;
@@ -340,7 +335,7 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
       panic("uvmunmap: not a leaf");
 
     if(pagesize(pagetable, a) == SUPERPGSIZE){
-      uint64 sp_start = SUPERPGROUNDDOWN(a);
+      uint64 sp_start = ((a % SUPERPGSIZE) == 0) ? a : SUPERPGROUNDDOWN(a);
       uint64 sp_end = sp_start + SUPERPGSIZE;
       uint64 unmap_end = va + npages * PGSIZE;
 
