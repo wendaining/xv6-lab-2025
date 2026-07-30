@@ -262,31 +262,30 @@ split_superpage(pagetable_t pagetable, uint64 sp_start,
   }
   uint64 sp_end = sp_start + SUPERPGSIZE;
   unmap_end = unmap_end < sp_end ? unmap_end : sp_end;
-  pte_t *l2_pte = &pagetable[PX(2, sp_start)];
-  pagetable_t l1 = (pagetable_t)l2_pte;
-  pte_t *l1_pte = &l1[PX(1, sp_start)];
-  uint64 sp_pa = PTE2PA(*l1_pte);
-  int flags = PTE_FLAGS(*l1_pte);
+  pagetable_t l1 = (pagetable_t)(&pagetable[PX(2, sp_start)]);
+  pte_t *sp_pte = &l1[PX(1, sp_start)]; 
+  uint64 sp_pa = PTE2PA(*sp_pte);
+  int flags = PTE_FLAGS(*sp_pte);
 
   pagetable_t l0 = (pagetable_t)kalloc();
   if (l0 == 0) {
     panic("split_superpage");
   }
   memset((void*)l0, 0, PGSIZE);
-  for (int i = 0; i < 512; i++) {
-    uint64 page_va = sp_start + i * PGSIZE;
-    if (page_va >= unmap_start && page_va < unmap_end) {
+  for (int i = 0; i < 512; ++i) {
+    uint64 va = sp_start + i * PGSIZE;
+    if (va >= unmap_start && va < unmap_end) {
       continue;
     }
-    uint64 new_page = (uint64)kalloc();
+    uint64 new_page = (uint64) kalloc();
     if (new_page == 0) {
       panic("split_superpage");
     }
-    memmove((void*)new_page, sp_pa + i * PGSIZE, PGSIZE);
-    l0[i] = PA2PTE(new_page) | flags | PTE_V;
+    memmove((void*)new_page, (void*)(sp_pa + i * PGSIZE), PGSIZE);
+    l0[i] = PTE2PA(new_page) | flags | PTE_V;
   }
-  l1_pte = PA2PTE(l0) | PTE_V;
-  superfree((void*)sp_pa);
+  sp_pte = PA2PTE(l0) | PTE_V;
+  superfree((void*)sp_start);
 }
 
 // Remove npages of mappings starting from va. va must be
