@@ -1,0 +1,33 @@
+Which registers contain arguments to functions? For example, which register holds 13 in main's call to printf?
+
+RISC-V 使用 a0～a7 传递前八个函数参数。在 main 对 printf 的调用中，数值 13 位于 a2 寄存器中。
+
+Where is the call to function f in the assembly code for main? Where is the call to g? (Hint: the compiler may inline functions.)
+
+没有调用 f 和 g 函数，编译器内联了 f(8) + 1 的表达式为 12，表现为汇编代码 li a1,12
+
+At what address is the function printf located?
+
+根据 30:	6c6000ef          	jal	6f6 <printf> 这一行，位于 6f6
+
+What value is in the register ra just after the jalr to printf in main?
+
+根据 RISC-V 文档，`jal` 跳转到目标函数时，会把下一条指令的地址保存到 ra，作为目标函数执行完毕之后，跳转到的地址，所以是 0x30 + 4 = 0x34
+
+Run the following code.
+
+	unsigned int i = 0x00646c72;
+	printf("H%x Wo%s", 57616, (char *) &i);
+      
+What is the output? Here's an ASCII table that maps bytes to characters.
+The output depends on that fact that the RISC-V is little-endian. If the RISC-V were instead big-endian what would you set i to in order to yield the same output? Would you need to change 57616 to a different value?
+
+输出是 HE110 World$。%x 把 57616 按 16 进制输出则得到 0xe110，然后对于 %s 由于 RISC-V 是小端序，则 i = 0x00646c72，转换成 4 字节无符号整数之后从小到大依次为 r l d 0。如果是大端序则设置 i = 0x726c6400
+
+Here's a description of little- and big-endian and a more whimsical description.
+
+In the following code, what is going to be printed after 'y='? (note: the answer is not a specific value.) Why does this happen?
+
+	printf("x=%d y=%d", 3);
+
+读到的会是 a2 寄存器里面残存的值，属于 UB 行为。
