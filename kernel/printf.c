@@ -140,6 +140,7 @@ panic(char *s)
   printf("panic: ");
   printf("%s\n", s);
   panicked = 1; // freeze uart output from other CPUs
+  backtrace();
   for(;;)
     ;
 }
@@ -148,4 +149,25 @@ void
 printfinit(void)
 {
   initlock(&pr.lock, "pr");
+}
+
+void
+backtrace(void)
+{
+  printf("backtrace:\n");
+
+  uint64 fp = r_fp();
+
+  // 当前内核栈所在页面的范围
+  uint64 stack_bottom = PGROUNDDOWN(fp);
+  uint64 stack_top = stack_bottom + PGSIZE;
+
+  while(fp >= stack_bottom + 16 && fp < stack_top){
+    // 当前函数返回到调用者后的地址
+    uint64 ra = *(uint64 *)(fp - 8);
+    printf("%p\n", (void*)ra);
+
+    // 切换到调用者的栈帧
+    fp = *(uint64 *)(fp - 16);
+  }
 }
