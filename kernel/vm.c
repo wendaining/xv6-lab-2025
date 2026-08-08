@@ -451,14 +451,29 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
 uint64
 vmfault(pagetable_t pagetable, uint64 va, int read)
 {
-  uint64 mem;
+  uint64 mem, pa;
+  uint flags;
+  pte_t *pte;
   struct proc *p = myproc();
 
   if (va >= p->sz)
     return 0;
   va = PGROUNDDOWN(va);
   if(ismapped(pagetable, va)) {
-    return 0;
+    pte = walk(pagetable, va, 0);
+    if(read || (*pte & PTE_U) == 0 || (*pte & PTE_COW) == 0)
+      return 0;
+
+    pa = PTE2PA(*pte);
+    flags = PTE_FLAGS(*pte);
+    mem = (uint64)kalloc();
+    if(mem == 0)
+      return 0;
+
+    memmove((void *)mem, (void *)pa, PGSIZE);
+    flags = (flags | PTE_W) & ~PTE_COW;
+    *pte = PA2PTE(mem) | flags;
+    return mem;
   }
   mem = (uint64) kalloc();
   if(mem == 0)
