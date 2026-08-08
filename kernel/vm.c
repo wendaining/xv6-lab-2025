@@ -314,6 +314,7 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
     }
     if(mappages(new, i, PGSIZE, pa, flags) != 0)
       goto err;
+    krefinc(pa);
   }
   return 0;
 
@@ -473,6 +474,7 @@ vmfault(pagetable_t pagetable, uint64 va, int read)
     memmove((void *)mem, (void *)pa, PGSIZE);
     flags = (flags | PTE_W) & ~PTE_COW;
     *pte = PA2PTE(mem) | flags;
+    kfree((void *)pa);
     return mem;
   }
   mem = (uint64) kalloc();
