@@ -344,27 +344,37 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 {
   uint64 n, va0, pa0;
   pte_t *pte;
+  int needfault;
 
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);
-    if(va0 >= MAXVA)
-      return -1;
-  
+    if(va0 >= MAXVA) {
+      goto err;
+    }
+
+    needfault = 0;
     pa0 = walkaddr(pagetable, va0);
-    if(pa0 == 0) {
-      if((pa0 = vmfault(pagetable, va0, 0)) == 0) {
-        return -1;
+    if(pa0 == 0){
+      needfault = 1;
+    } else {
+      pte = walk(pagetable, va0, 0);
+      if((*pte & PTE_W) == 0){
+        if((*pte & PTE_COW) == 0) {
+          goto err;
+        }
+        needfault = 1;
       }
     }
 
-    pte = walk(pagetable, va0, 0);
-    // forbid copyout over read-only user text pages.
-    if((*pte & PTE_W) == 0)
-      return -1;
+    if(needfault && (pa0 = vmfault(pagetable, va0, 0)) == 0) {
+      goto err;
+    }
       
+
     n = PGSIZE - (dstva - va0);
-    if(n > len)
+    if(n > len) {
       n = len;
+    }
     memmove((void *)(pa0 + (dstva - va0)), src, n);
 
     len -= n;
@@ -372,6 +382,9 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
     dstva = va0 + PGSIZE;
   }
   return 0;
+
+ err:
+  return -1;
 }
 
 // Copy from user to kernel.
