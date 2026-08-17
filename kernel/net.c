@@ -17,11 +17,68 @@ static uint32 local_ip = MAKE_IP_ADDR(10, 0, 2, 15);
 // qemu host's ethernet address.
 static uint8 host_mac[ETHADDR_LEN] = { 0x52, 0x55, 0x0a, 0x00, 0x02, 0x02 };
 
+#define UDP_QUEUE_SIZE 16
+
+struct udp_packet {
+  char *buf;
+  int len;
+};
+
+struct udp_port {
+  uint16 port;
+  struct udp_packet queue[UDP_QUEUE_SIZE];
+  int head;
+  int tail;
+  int count;
+  struct udp_port *next;
+};
+
+#define UDP_PORTS_PER_PAGE 12
+
+struct udp_port_page {
+  struct udp_port ports[UDP_PORTS_PER_PAGE];
+  int used;
+  struct udp_port_page *next;
+};
+
 static struct spinlock netlock;
+static struct udp_port *bound_ports;
+static struct udp_port_page *port_pages;
+
+// The caller must hold netlock.
+static struct udp_port *
+find_udp_port(uint16 port)
+{
+  for(struct udp_port *p = bound_ports; p != 0; p = p->next){
+    if(p->port == port)
+      return p;
+  }
+  return 0;
+}
+
+// Allocate stable port records several at a time, so that bind() does not
+// waste an entire physical page for each small udp_port structure.
+// The caller must hold netlock.
+static struct udp_port *
+alloc_udp_port(void)
+{
+  if(port_pages == 0 || port_pages->used == UDP_PORTS_PER_PAGE){
+    struct udp_port_page *page = (struct udp_port_page *)kalloc();
+    if(page == 0)
+      return 0;
+    memset(page, 0, PGSIZE);
+    page->next = port_pages;
+    port_pages = page;
+  }
+
+  return &port_pages->ports[port_pages->used++];
+}
 
 void
 netinit(void)
 {
+  if(sizeof(struct udp_port_page) > PGSIZE)
+    panic("udp_port_page");
   initlock(&netlock, "netlock");
 }
 
@@ -34,11 +91,28 @@ netinit(void)
 uint64
 sys_bind(void)
 {
-  //
-  // Your code here.
-  //
+  int port;
+  argint(0, &port);
+  if(port < 0 || port > 0xffff)
+    return -1;
 
-  return -1;
+  acquire(&netlock);
+  if(find_udp_port(port) != 0){
+    release(&netlock);
+    return 0;
+  }
+
+  struct udp_port *newport = alloc_udp_port();
+  if(newport == 0){
+    release(&netlock);
+    return -1;
+  }
+  newport->port = port;
+  newport->next = bound_ports;
+  bound_ports = newport;
+  release(&netlock);
+
+  return 0;
 }
 
 //
@@ -74,10 +148,74 @@ sys_unbind(void)
 uint64
 sys_recv(void)
 {
-  //
-  // Your code here.
-  //
-  return -1;
+  int dport;
+  uint64 srcaddr;
+  uint64 sportaddr;
+  uint64 bufaddr;
+  int maxlen;
+
+  argint(0, &dport);
+  argaddr(1, &srcaddr);
+  argaddr(2, &sportaddr);
+  argaddr(3, &bufaddr);
+  argint(4, &maxlen);
+
+  if(dport < 0 || dport > 0xffff || maxlen < 0)
+    return -1;
+
+  acquire(&netlock);
+  struct udp_port *port = find_udp_port(dport);
+  if(port == 0){
+    release(&netlock);
+    return -1;
+  }
+
+  while(port->count == 0){
+    if(killed(myproc())){
+      release(&netlock);
+      return -1;
+    }
+    sleep(port, &netlock);
+  }
+
+  struct udp_packet packet = port->queue[port->head];
+  port->queue[port->head].buf = 0;
+  port->queue[port->head].len = 0;
+  port->head = (port->head + 1) % UDP_QUEUE_SIZE;
+  port->count--;
+  release(&netlock);
+
+  int headers = sizeof(struct eth) + sizeof(struct ip) + sizeof(struct udp);
+  if(packet.len < headers){
+    kfree(packet.buf);
+    return -1;
+  }
+
+  struct eth *eth = (struct eth *)packet.buf;
+  struct ip *ip = (struct ip *)(eth + 1);
+  struct udp *udp = (struct udp *)(ip + 1);
+  int udp_len = ntohs(udp->ulen);
+  if(udp_len < sizeof(struct udp) ||
+     udp_len > packet.len - sizeof(struct eth) - sizeof(struct ip)){
+    kfree(packet.buf);
+    return -1;
+  }
+
+  uint32 src = ntohl(ip->ip_src);
+  uint16 sport = ntohs(udp->sport);
+  int payload_len = udp_len - sizeof(struct udp);
+  int copy_len = payload_len < maxlen ? payload_len : maxlen;
+  char *payload = (char *)(udp + 1);
+  struct proc *p = myproc();
+
+  int failed = copyout(p->pagetable, srcaddr, (char *)&src, sizeof(src)) < 0 ||
+               copyout(p->pagetable, sportaddr, (char *)&sport, sizeof(sport)) < 0 ||
+               copyout(p->pagetable, bufaddr, payload, copy_len) < 0;
+  kfree(packet.buf);
+
+  if(failed)
+    return -1;
+  return copy_len;
 }
 
 // This code is lifted from FreeBSD's ping.c, and is copyright by the Regents
@@ -188,10 +326,44 @@ ip_rx(char *buf, int len)
     printf("ip_rx: received an IP packet\n");
   seen_ip = 1;
 
-  //
-  // Your code here.
-  //
-  
+  int headers = sizeof(struct eth) + sizeof(struct ip) + sizeof(struct udp);
+  if(len < headers){
+    kfree(buf);
+    return;
+  }
+
+  struct eth *eth = (struct eth *)buf;
+  struct ip *ip = (struct ip *)(eth + 1);
+  if((ip->ip_vhl >> 4) != 4 || (ip->ip_vhl & 0xf) != 5 ||
+     ip->ip_p != IPPROTO_UDP){
+    kfree(buf);
+    return;
+  }
+
+  struct udp *udp = (struct udp *)(ip + 1);
+  int udp_len = ntohs(udp->ulen);
+  if(udp_len < sizeof(struct udp) ||
+     udp_len > len - sizeof(struct eth) - sizeof(struct ip)){
+    kfree(buf);
+    return;
+  }
+
+  uint16 dport = ntohs(udp->dport);
+
+  acquire(&netlock);
+  struct udp_port *port = find_udp_port(dport);
+  if(port == 0 || port->count == UDP_QUEUE_SIZE){
+    release(&netlock);
+    kfree(buf);
+    return;
+  }
+
+  port->queue[port->tail].buf = buf;
+  port->queue[port->tail].len = len;
+  port->tail = (port->tail + 1) % UDP_QUEUE_SIZE;
+  port->count++;
+  wakeup(port);
+  release(&netlock);
 }
 
 //
