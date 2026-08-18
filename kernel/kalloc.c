@@ -76,10 +76,27 @@ kalloc(void)
   push_off();
   int id = cpuid();
   acquire(&kmem.lock[id]);
-  r = kmem.freelist;
+  r = kmem.freelist[id];
   if(r)
     kmem.freelist[id] = r->next;
   release(&kmem.lock[id]);
+  if (r == 0) {
+    for (int i = 0; i < NCPU; ++i) {
+      // 找到序号最小的有空余页的空闲列表
+      if (i == id) {
+        continue;
+      }
+      acquire(&kmem.lock[i]);
+      if (kmem.freelist[i]) {
+        r = kmem.freelist[i];
+        kmem.freelist[i] = r->next;
+      }
+      release(&kmem.lock[i]);
+      if (r) {
+        break;
+      }
+    }
+  }
   pop_off();
   if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk
