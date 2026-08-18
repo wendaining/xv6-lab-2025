@@ -124,29 +124,62 @@ release(struct spinlock *lk)
 static void
 read_acquire_inner(struct rwspinlock *rwlk)
 {
-  // Replace this with your implementation.
-  acquire(&rwlk->l);
+  while (1) {
+    acquire(&rwlk->l);
+    if (rwlk->is_writer_active == 0 && rwlk->waiting_writers == 0) {
+      rwlk->readers++;
+      release(&rwlk->l);
+      return;
+    }
+    release(&rwlk->l);
+  }
 }
 
 static void
 read_release_inner(struct rwspinlock *rwlk)
 {
-  // Replace this with your implementation.
-  release(&rwlk->l);
+  while (1) {
+    acquire(&rwlk->l);
+    if (rwlk->readers > 0) {
+      rwlk->readers--;
+      release(&rwlk->l);
+      return;
+    }
+    release(&rwlk->l);
+  }
 }
 
 static void
 write_acquire_inner(struct rwspinlock *rwlk)
 {
-  // Replace this with your implementation.
+  // 首先这个肯定不能放到循环里面，其次这个务必要加锁
   acquire(&rwlk->l);
+  rwlk->waiting_writers++;
+  release(&rwlk->l);
+  while (1) {
+    acquire(&rwlk->l);
+    if (rwlk->readers == 0 && rwlk->is_writer_active == 0) {
+      rwlk->waiting_writers--;
+      rwlk->is_writer_active = 1;
+      release(&rwlk->l);
+      return;
+    }
+    release(&rwlk->l);
+  }
 }
 
 static void
 write_release_inner(struct rwspinlock *rwlk)
 {
-  // Replace this with your implementation.
-  release(&rwlk->l);
+  while (1) {
+    acquire(&rwlk->l);
+    if (rwlk->is_writer_active) {
+      rwlk->is_writer_active = 0;
+      release(&rwlk->l);
+      return;
+    }
+    release(&rwlk->l);
+  }
 }
 
 void
@@ -180,8 +213,10 @@ write_release(struct rwspinlock *rwlk)
 void
 initrwlock(struct rwspinlock *rwlk)
 {
-  // Replace this with your implementation.
   initlock(&rwlk->l, "rwlk");
+  rwlk->is_writer_active = 0;
+  rwlk->readers = 0;
+  rwlk->waiting_writers = 0;
 }
 
 // Test rwspinlock implementation.
