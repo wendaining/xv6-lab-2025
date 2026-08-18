@@ -439,6 +439,47 @@ bmap(struct inode *ip, uint bn)
     brelse(bp);
     return addr;
   }
+  // 以下为实现代码
+  bn -= NINDIRECT;
+
+  if(bn < NINDIRECT2) {
+    // 这里的 addr 是二级间接块的地址
+    if ((addr = ip->addrs[NDIRECT + 1]) == 0) {
+      addr = balloc(ip->dev);
+      if (addr == 0) {
+        return 0;
+      }
+      ip->addrs[NDIRECT + 1] = addr;
+    }
+    // 这里的 bp 是二级间接块的实际 struct buf
+    bp = bread(ip->dev, addr);
+    a = (uint*)bp->data;
+    // 这里的 addr 是二级间接块指向的一级间接块的地址
+    if ((addr = a[bn / NINDIRECT]) == 0) {
+      addr = balloc(ip->dev);
+      if (addr == 0) {
+        return 0;
+      }
+      a[bn / NINDIRECT] = addr;
+      // 记得任何对于实际 buf 的修改都要落日志，维护崩溃一致性
+      log_write(bp);
+    }
+    brelse(bp);
+    // 这里的 bp 是一级间接块的实际的 struct buf
+    bp = bread(ip->dev, addr);
+    a = (uint*)bp->data;
+    // 这里的 addr 是最后实际的数据的地址
+    if ((addr = a[bn % NINDIRECT]) == 0) {
+      addr = balloc(ip->dev);
+      if (addr == 0) {
+        return 0;
+      }
+      a[bn % NINDIRECT] = addr;
+      log_write(bp);
+    }
+    brelse(bp);
+    return addr;
+  }
 
   panic("bmap: out of range");
 }
@@ -448,7 +489,7 @@ bmap(struct inode *ip, uint bn)
 void
 itrunc(struct inode *ip)
 {
-  int i, j;
+  int i, j, k;
   struct buf *bp;
   uint *a;
 
@@ -469,6 +510,26 @@ itrunc(struct inode *ip)
     brelse(bp);
     bfree(ip->dev, ip->addrs[NDIRECT]);
     ip->addrs[NDIRECT] = 0;
+  }
+
+  if(ip->addrs[NDIRECT + 1]) {
+    bp = bread(ip->dev, ip->addrs[NDIRECT + 1]);
+    a = (uint*)bp->data;
+    for(j = 0; j < NINDIRECT; j++) {
+      uint in1_addr;
+      if ((in1_addr = a[j]) != 0) {
+        struct buf *in1_bp = bread(ip->dev, in1_addr);
+        uint *in1_a = (uint*)in1_bp->data;
+        for(k = 0; k < NINDIRECT; k++) {
+          bfree(ip->dev, in1_a[k]);
+        }
+        brelse(in1_bp);
+        bfree(ip->dev, in1_addr);
+      }
+    }
+    brelse(bp);
+    bfree(ip->dev, ip->addrs[NDIRECT + 1]);
+    ip->addrs[NDIRECT + 1] = 0;
   }
 
   ip->size = 0;
