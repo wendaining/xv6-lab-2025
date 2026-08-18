@@ -328,11 +328,7 @@ sys_open(void)
       return -1;
     }
     ilock(ip);
-    if(ip->type == T_DIR && omode != O_RDONLY){
-      iunlockput(ip);
-      end_op();
-      return -1;
-    }
+    // 目录检查放在展开之后
   }
   // ========
   int depth = 0;
@@ -356,6 +352,13 @@ sys_open(void)
       return -1;
     }
   }
+
+  if(ip->type == T_DIR && omode != O_RDONLY){
+    iunlockput(ip);
+    end_op();
+    return -1;
+  }
+
   // ========
 
   if(ip->type == T_DEVICE && (ip->major < 0 || ip->major >= NDEV)){
