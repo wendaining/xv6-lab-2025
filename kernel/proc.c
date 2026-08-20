@@ -329,6 +329,16 @@ kexit(int status)
   if(p == initproc)
     panic("init exiting");
 
+  // munmap all mmap regions
+  for (int i = 0; i < NVMA; ++i) {
+    struct vma *vma = &p->vma[i];
+    if (vma->valid) {
+      uint64 addr = PGROUNDDOWN(vma->addr);
+      uint64 len = PGROUNDDOWN(vma->len);
+      uvmunmap(p->pagetable, addr, len, 1);
+    }
+  }
+
   // Close all open files.
   for(int fd = 0; fd < NOFILE; fd++){
     if(p->ofile[fd]){
