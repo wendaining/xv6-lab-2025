@@ -580,15 +580,14 @@ vmaunmap(struct proc *p, uint64 addr, uint64 len)
     uint64 unmap_end = addr + len;
     uint64 free_end = unmap_end < vma_end ? unmap_end : vma_end;
     uint64 free_len = free_end - addr;
-    uint64 free_pages = free_len / PGSIZE;
 
-    if(vma->flags == MAP_SHARED && (vma->prot & PROT_WRITE)) {
-      for(uint64 pageva = addr; pageva < free_end; pageva += PGSIZE) {
-        pte_t *pte = walk(p->pagetable, pageva, 0);
-        if(pte == 0 || (*pte & PTE_V) == 0) {
-          continue;
-        }
+    for(uint64 pageva = addr; pageva < free_end; pageva += PGSIZE) {
+      pte_t *pte = walk(p->pagetable, pageva, 0);
+      if(pte == 0 || (*pte & PTE_V) == 0) {
+        continue;
+      }
 
+      if(vma->flags == MAP_SHARED && (vma->prot & PROT_WRITE)) {
         uint64 pa = PTE2PA(*pte);
         uint64 fileoff = vma->offset + (pageva - vma->addr);
         uint write_len = PGSIZE;
@@ -606,9 +605,8 @@ vmaunmap(struct proc *p, uint64 addr, uint64 len)
           return -1;
         }
       }
+      uvmunmap(p->pagetable, pageva, 1, 1);
     }
-
-    uvmunmap(p->pagetable, addr, free_pages, 1);
 
     if(addr == vma->addr && free_end == vma_end) {
       fileclose(f);
