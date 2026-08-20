@@ -573,3 +573,9 @@ sys_mmap(void)
   p->sz = (uint64)addr + maplen;
   return (uint64)addr;
 }
+
+uint64
+sys_munmap(void)
+{
+  return 0;
+}

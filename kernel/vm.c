@@ -5,8 +5,11 @@
 #include "riscv.h"
 #include "defs.h"
 #include "spinlock.h"
+#include "sleeplock.h"
 #include "proc.h"
 #include "fs.h"
+#include "file.h"
+#include "fcntl.h"
 
 /*
  * the kernel's page table.
@@ -445,6 +448,22 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   }
 }
 
+// check if this va is in mmap region
+// returns the vma index the va in
+// if not mapped, return -1
+int
+ismmaped(uint64 va)
+{
+  struct proc *p = myproc();
+  for (int i = 0; i < NVMA; ++i) {
+    struct vma *vma = &p->vma[i];
+    if (vma -> valid && va >= vma->addr && va < vma->addr + vma->len) {
+      return i;
+    }
+  }
+  return -1;
+}
+
 // allocate and map user memory if process is referencing a page
 // that was lazily allocated in sys_sbrk().
 // returns 0 if va is invalid or already mapped, or if
@@ -461,6 +480,41 @@ vmfault(pagetable_t pagetable, uint64 va, int read)
   if(ismapped(pagetable, va)) {
     return 0;
   }
+
+  if (1) {
+    int index;
+    if ((index = ismmaped(va)) != -1) {
+      struct vma *vma = &p->vma[index];
+      struct inode *ip = vma->f->ip;
+      // mem 是 kalloc() 返回的内核地址
+      if ((mem = (uint64) kalloc()) == 0) {
+        return 0;
+      }
+      memset((void *) mem, 0, PGSIZE);
+      ilock(ip);
+      // va - vma->addr = 当前产生 page fault 的页面与 vma 开始地址的距离
+      uint64 fileoff = (va - vma->addr) + vma->offset;
+      if (readi(ip, 0, mem, fileoff, PGSIZE) == -1) {
+        iunlock(ip);
+        return 0;
+      }
+      int flags = PTE_U;
+      if(vma->prot & PROT_READ) {
+        flags |= PTE_R;
+      }
+      if(vma->prot & PROT_WRITE) {
+        flags |= PTE_R | PTE_W;
+      }    
+      if (mappages(p->pagetable, va, PGSIZE, mem, flags) != 0) {
+        iunlock(ip);
+        kfree((void*) mem);
+        return 0;
+      }
+      iunlock(ip);
+      return mem;
+    } // 否则，只是懒分配的情况
+  }
+  
   mem = (uint64) kalloc();
   if(mem == 0)
     return 0;
