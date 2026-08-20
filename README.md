@@ -1,6 +1,8 @@
-# xv6 fall 2025 labs - implementation and records
+# xv6 fall 2025 labs - implementations and records
 
-official website for this course：https://pdos.csail.mit.edu/6.828/2025/labs
+Official website for this course：https://pdos.csail.mit.edu/6.828/2025/labs
+
+Checkout / switch to different branches to see the actual implementation of each lab.
 
 My blogs on each labs:
 
