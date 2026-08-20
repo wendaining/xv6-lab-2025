@@ -178,3 +178,43 @@ filewrite(struct file *f, uint64 addr, int n)
   return ret;
 }
 
+// Write n bytes from src to an inode file at an explicit offset.
+// user_src selects whether src is a user address (1) or kernel address (0).
+// Unlike filewrite(), this function does not read or update f->off.
+int
+filewriteat(struct file *f, int user_src, uint64 src, uint64 off, int n)
+{
+  int r;
+
+  if(f->writable == 0 || f->type != FD_INODE) {
+    return -1;
+  }
+  if((user_src != 0 && user_src != 1) || n < 0) {
+    return -1;
+  }
+
+  // Keep each transaction small enough for the inode, possible indirect
+  // block, allocation blocks, and non-aligned-write slop in the log.
+  int max = ((MAXOPBLOCKS-1-1-2) / 2) * BSIZE;
+  int written = 0;
+
+  while(written < n) {
+    int n1 = n - written;
+    if(n1 > max) {
+      n1 = max;
+    }
+
+    begin_op();
+    ilock(f->ip);
+    r = writei(f->ip, user_src, src + written, off + written, n1);
+    iunlock(f->ip);
+    end_op();
+
+    if(r != n1) {
+      return -1;
+    }
+    written += r;
+  }
+
+  return written;
+}

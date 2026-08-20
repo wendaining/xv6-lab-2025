@@ -290,6 +290,15 @@ kfork(void)
 
   pid = np->pid;
 
+  for (int i = 0; i < NVMA; ++i) {
+    struct vma* vma = &p->vma[i];
+    struct vma* nvma = &np->vma[i];
+    *nvma = *vma;
+    if (nvma->valid) {
+      filedup(nvma->f);
+    }
+  }
+
   release(&np->lock);
 
   acquire(&wait_lock);
@@ -330,12 +339,12 @@ kexit(int status)
     panic("init exiting");
 
   // munmap all mmap regions
-  for (int i = 0; i < NVMA; ++i) {
+  for(int i = 0; i < NVMA; i++) {
     struct vma *vma = &p->vma[i];
-    if (vma->valid) {
-      uint64 addr = PGROUNDDOWN(vma->addr);
-      uint64 len = PGROUNDDOWN(vma->len);
-      uvmunmap(p->pagetable, addr, len, 1);
+    if(vma->valid) {
+      if(vmaunmap(p, vma->addr, vma->len) < 0) {
+        panic("kexit: vmaunmap");
+      }
     }
   }
 

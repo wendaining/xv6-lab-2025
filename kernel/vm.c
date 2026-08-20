@@ -493,6 +493,7 @@ vmfault(pagetable_t pagetable, uint64 va, int read)
       memset((void *) mem, 0, PGSIZE);
       ilock(ip);
       // va - vma->addr = 当前产生 page fault 的页面与 vma 开始地址的距离
+      // 看似没保证页对齐，但是 vma->offset 永远是 0，而前两者已经页对齐，所以无妨
       uint64 fileoff = (va - vma->addr) + vma->offset;
       if (readi(ip, 0, mem, fileoff, PGSIZE) == -1) {
         iunlock(ip);
@@ -536,5 +537,89 @@ ismapped(pagetable_t pagetable, uint64 va)
   if (*pte & PTE_V){
     return 1;
   }
+  return 0;
+}
+
+// Unmap [addr, addr + len) from p's mmap regions. Write resident
+// MAP_SHARED pages back before freeing them and update each affected VMA.
+int
+vmaunmap(struct proc *p, uint64 addr, uint64 len)
+{
+  addr = PGROUNDDOWN(addr);
+  len = PGROUNDUP(len);
+  if(len == 0 || addr + len < addr) {
+    return -1;
+  }
+
+  while(len > 0) {
+    struct vma *vma = 0;
+
+    // Re-scan because VMA slot order need not match virtual-address order.
+    for(int idx = 0; idx < NVMA; idx++) {
+      struct vma *candidate = &p->vma[idx];
+      if(candidate->valid && addr >= candidate->addr &&
+         addr - candidate->addr < candidate->len) {
+        vma = candidate;
+        break;
+      }
+    }
+
+    if(vma == 0) {
+      return -1;
+    }
+
+    struct file *f = vma->f;
+    struct inode *ip = f->ip;
+    uint64 vma_end = vma->addr + vma->len;
+    uint64 unmap_end = addr + len;
+    uint64 free_end = unmap_end < vma_end ? unmap_end : vma_end;
+    uint64 free_len = free_end - addr;
+    uint64 free_pages = free_len / PGSIZE;
+
+    if(vma->flags == MAP_SHARED && (vma->prot & PROT_WRITE)) {
+      for(uint64 pageva = addr; pageva < free_end; pageva += PGSIZE) {
+        pte_t *pte = walk(p->pagetable, pageva, 0);
+        if(pte == 0 || (*pte & PTE_V) == 0) {
+          continue;
+        }
+
+        uint64 pa = PTE2PA(*pte);
+        uint64 fileoff = vma->offset + (pageva - vma->addr);
+        uint write_len = PGSIZE;
+
+        ilock(ip);
+        if(fileoff >= ip->size) {
+          write_len = 0;
+        } else if(write_len > ip->size - fileoff) {
+          write_len = ip->size - fileoff;
+        }
+        iunlock(ip);
+
+        if(write_len > 0 &&
+           filewriteat(f, 0, pa, fileoff, write_len) != write_len) {
+          return -1;
+        }
+      }
+    }
+
+    uvmunmap(p->pagetable, addr, free_pages, 1);
+
+    if(addr == vma->addr && free_end == vma_end) {
+      fileclose(f);
+      memset(vma, 0, sizeof(*vma));
+    } else if(addr == vma->addr) {
+      vma->addr += free_len;
+      vma->len -= free_len;
+      vma->offset += free_len;
+    } else if(free_end == vma_end) {
+      vma->len -= free_len;
+    } else {
+      panic("vmaunmap: hole");
+    }
+
+    addr = free_end;
+    len -= free_len;
+  }
+
   return 0;
 }

@@ -82,14 +82,13 @@ struct trapframe {
 enum procstate { UNUSED, USED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
 
 struct vma {
-  int valid;
-  uint64 addr;
-  uint64 len;
-  int permissions;
-  uint64 offset;
-  int prot;
-  int flags;
-  struct file *f;
+  int valid;          // Whether this VMA slot is in use.
+  uint64 addr;        // Page-aligned start virtual address of the mapping.
+  uint64 len;         // Current length of the mapped region, in bytes.
+  uint64 offset;      // File offset corresponding to addr.
+  int prot;           // Access permissions: PROT_READ and/or PROT_WRITE.
+  int flags;          // Mapping type: MAP_SHARED or MAP_PRIVATE.
+  struct file *f;     // Referenced file; held with filedup() while valid.
 };
 
 // Per-process state

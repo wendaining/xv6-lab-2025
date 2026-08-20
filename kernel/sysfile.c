@@ -563,8 +563,7 @@ sys_mmap(void)
 
   vma->valid = 1;
   vma->addr = (uint64)addr;
-  vma->len = len;
-  vma->permissions = prot;
+  vma->len = maplen;
   vma->offset = offset;
   vma->prot = prot;
   vma->flags = flags;
@@ -574,8 +573,14 @@ sys_mmap(void)
   return (uint64)addr;
 }
 
+
 uint64
 sys_munmap(void)
 {
-  return 0;
+  uint64 addr;
+  size_t len;
+
+  argaddr(0, &addr);
+  argaddr(1, &len);
+  return vmaunmap(myproc(), addr, len);
 }
