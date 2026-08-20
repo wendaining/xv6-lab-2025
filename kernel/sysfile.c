@@ -503,3 +503,73 @@ sys_pipe(void)
   }
   return 0;
 }
+
+uint64
+sys_mmap(void)
+{
+  void *addr;
+  size_t len;
+  int prot, flags, fd;
+  off_t offset;
+  struct file *f;
+  struct proc *p = myproc();
+
+  argaddr(0, (uint64 *)&addr);
+  argaddr(1, &len);
+  argint(2, &prot);
+  argint(3, &flags);
+  argaddr(5, (uint64 *)&offset);
+
+  // This lab only supports kernel-selected addresses and mappings that
+  // start at the beginning of a regular file.
+  if(addr != 0 || len == 0 || offset != 0) {
+    return -1;
+  }
+  if((prot & ~(PROT_READ | PROT_WRITE)) != 0 ||
+     (prot & (PROT_READ | PROT_WRITE)) == 0) {
+      return -1;
+  }
+  if(flags != MAP_SHARED && flags != MAP_PRIVATE) {
+    return -1;
+  }
+  // 将 fd 对应的文件对应到 struct file *f 上
+  if(argfd(4, &fd, &f) < 0 || f->type != FD_INODE || !f->readable) {
+    return -1;
+  }
+  if(flags == MAP_SHARED && (prot & PROT_WRITE) && !f->writable) {
+    return -1;
+  }
+
+  // 为 mmap 选择一段虚拟地址进行映射，
+  // p->sz 是目前的进程能用到的最高的地址空间，将新映射放在它后面
+  addr = (void *)PGROUNDUP(p->sz);
+  uint64 limit = MAXVA - 2 * PGSIZE;  // leave TRAPFRAME/TRAMPOLINE untouched
+  if((uint64)addr >= limit || len > limit - (uint64)addr) {
+    return -1;
+  }
+  // 长度round up到最近的页面字节数
+  size_t maplen = PGROUNDUP(len);
+
+  int idx;
+  for(idx = 0; idx < NVMA; idx++){
+    if(!p->vma[idx].valid) {
+      break;
+    }
+  }
+  if(idx == NVMA) {
+    return -1;
+  }
+  struct vma *vma = &p->vma[idx];
+
+  vma->valid = 1;
+  vma->addr = (uint64)addr;
+  vma->len = len;
+  vma->permissions = prot;
+  vma->offset = offset;
+  vma->prot = prot;
+  vma->flags = flags;
+  vma->f = filedup(f);
+
+  p->sz = (uint64)addr + maplen;
+  return (uint64)addr;
+}
