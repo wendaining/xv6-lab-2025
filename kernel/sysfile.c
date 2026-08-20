@@ -540,15 +540,23 @@ sys_mmap(void)
     return -1;
   }
 
-  // 为 mmap 选择一段虚拟地址进行映射，
-  // p->sz 是目前的进程能用到的最高的地址空间，将新映射放在它后面
-  addr = (void *)PGROUNDUP(p->sz);
-  uint64 limit = MAXVA - 2 * PGSIZE;  // leave TRAPFRAME/TRAMPOLINE untouched
-  if((uint64)addr >= limit || len > limit - (uint64)addr) {
+  // 为了防止从 p->sz 开始分配，结果因为创建/销毁 vma 的顺序不同，导致 p->sz 没有可能正确回收的问题
+  // 不使用 p->sz 开始分配的方法，而是从顶上开始倒着分配
+  // 因为虚拟地址近乎是无穷大的，这样不会对 OS 产生影响
+  // #define MMAPTOP (MAXVA - 2 * PGSIZE)
+  if(len > MMAPTOP) {
     return -1;
   }
-  // 长度round up到最近的页面字节数
   size_t maplen = PGROUNDUP(len);
+  if(maplen > p->mmap_top) {
+    return -1;
+  }
+
+  uint64 mapaddr = p->mmap_top - maplen;
+  if(mapaddr < PGROUNDUP(p->sz)) {
+    return -1;
+  }
+  addr = (void *)mapaddr;
 
   int idx;
   for(idx = 0; idx < NVMA; idx++){
@@ -569,7 +577,7 @@ sys_mmap(void)
   vma->flags = flags;
   vma->f = filedup(f);
 
-  p->sz = (uint64)addr + maplen;
+  p->mmap_top = (uint64)addr;
   return (uint64)addr;
 }
 

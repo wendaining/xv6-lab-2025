@@ -125,6 +125,7 @@ found:
   p->pid = allocpid();
   p->state = USED;
   memset(p->vma, 0, sizeof(p->vma));
+  p->mmap_top = MMAPTOP;
 
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
@@ -163,6 +164,7 @@ freeproc(struct proc *p)
     proc_freepagetable(p->pagetable, p->sz);
   p->pagetable = 0;
   p->sz = 0;
+  p->mmap_top = MMAPTOP;
   p->pid = 0;
   p->parent = 0;
   p->name[0] = 0;
@@ -273,6 +275,7 @@ kfork(void)
     return -1;
   }
   np->sz = p->sz;
+  np->mmap_top = p->mmap_top;
 
   // copy saved user registers.
   *(np->trapframe) = *(p->trapframe);

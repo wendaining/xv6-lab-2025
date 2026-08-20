@@ -452,12 +452,11 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
 // returns the vma index the va in
 // if not mapped, return -1
 int
-ismmaped(uint64 va)
+ismmaped(struct proc* p, uint64 va)
 {
-  struct proc *p = myproc();
   for (int i = 0; i < NVMA; ++i) {
     struct vma *vma = &p->vma[i];
-    if (vma -> valid && va >= vma->addr && va < vma->addr + vma->len) {
+    if (vma->valid && va >= vma->addr && va < vma->addr + vma->len) {
       return i;
     }
   }
@@ -474,51 +473,58 @@ vmfault(pagetable_t pagetable, uint64 va, int read)
   uint64 mem;
   struct proc *p = myproc();
 
-  if (va >= p->sz)
+  if(va >= MAXVA) {
     return 0;
+  }
   va = PGROUNDDOWN(va);
   if(ismapped(pagetable, va)) {
     return 0;
   }
 
-  if (1) {
-    int index;
-    if ((index = ismmaped(va)) != -1) {
-      struct vma *vma = &p->vma[index];
-      struct inode *ip = vma->f->ip;
-      // mem 是 kalloc() 返回的内核地址
-      if ((mem = (uint64) kalloc()) == 0) {
-        return 0;
-      }
-      memset((void *) mem, 0, PGSIZE);
-      ilock(ip);
-      // va - vma->addr = 当前产生 page fault 的页面与 vma 开始地址的距离
-      // 看似没保证页对齐，但是 vma->offset 永远是 0，而前两者已经页对齐，所以无妨
-      uint64 fileoff = (va - vma->addr) + vma->offset;
-      if (readi(ip, 0, mem, fileoff, PGSIZE) == -1) {
-        iunlock(ip);
-        return 0;
-      }
-      int flags = PTE_U;
-      if(vma->prot & PROT_READ) {
-        flags |= PTE_R;
-      }
-      if(vma->prot & PROT_WRITE) {
-        flags |= PTE_R | PTE_W;
-      }    
-      if (mappages(p->pagetable, va, PGSIZE, mem, flags) != 0) {
-        iunlock(ip);
-        kfree((void*) mem);
-        return 0;
-      }
+  int index = ismmaped(p, va);
+  if(index != -1) {
+    struct vma *vma = &p->vma[index];
+    struct inode *ip = vma->f->ip;
+    // mem 是 kalloc() 返回的内核地址
+    if((mem = (uint64)kalloc()) == 0) {
+      return 0;
+    }
+    memset((void *)mem, 0, PGSIZE);
+    ilock(ip);
+    // va - vma->addr = 当前产生 page fault 的页面与 vma 开始地址的距离
+    // 看似没保证页对齐，但是 vma->offset 永远是 0，而前两者已经页对齐，所以无妨
+    uint64 fileoff = (va - vma->addr) + vma->offset;
+    if(readi(ip, 0, mem, fileoff, PGSIZE) == -1) {
       iunlock(ip);
-      return mem;
-    } // 否则，只是懒分配的情况
+      kfree((void *)mem);
+      return 0;
+    }
+    int flags = PTE_U;
+    if(vma->prot & PROT_READ) {
+      flags |= PTE_R;
+    }
+    if(vma->prot & PROT_WRITE) {
+      flags |= PTE_R | PTE_W;
+    }
+    if(mappages(pagetable, va, PGSIZE, mem, flags) != 0) {
+      iunlock(ip);
+      kfree((void *)mem);
+      return 0;
+    }
+    iunlock(ip);
+    return mem;
   }
-  
-  mem = (uint64) kalloc();
-  if(mem == 0)
+
+  // Only addresses below p->sz belong to the ordinary lazy-allocation area.
+  // A high address removed by munmap must remain invalid.
+  if(va >= p->sz) {
     return 0;
+  }
+
+  mem = (uint64) kalloc();
+  if(mem == 0) {
+    return 0;
+  }
   memset((void *) mem, 0, PGSIZE);
   if (mappages(p->pagetable, va, PGSIZE, mem, PTE_W|PTE_U|PTE_R) != 0) {
     kfree((void *)mem);
@@ -556,10 +562,10 @@ vmaunmap(struct proc *p, uint64 addr, uint64 len)
 
     // Re-scan because VMA slot order need not match virtual-address order.
     for(int idx = 0; idx < NVMA; idx++) {
-      struct vma *candidate = &p->vma[idx];
-      if(candidate->valid && addr >= candidate->addr &&
-         addr - candidate->addr < candidate->len) {
-        vma = candidate;
+      struct vma *cand = &p->vma[idx];
+      if(cand->valid && addr >= cand->addr &&
+         addr - cand->addr < cand->len) {
+        vma = cand;
         break;
       }
     }
