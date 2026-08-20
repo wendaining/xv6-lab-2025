@@ -1,0 +1,42 @@
+运行 `pgtbltest`：
+
+<img src="https://image.wendaining.top/image-20260727140333426.png" style="zoom:50%;" />
+
+打印出的是此进程的 first 10 and last 10 PTE。
+
+分析一下，首先根据 xv6 book，一个 PTE 的结构如图：
+
+<img src="https://image.wendaining.top/image-20260727151216229.png" style="zoom:50%;" />
+
+则：
+
+- `va`：进程看到的虚拟页地址
+- `pte`：完整页表项
+- `pa`：它映射到的物理页地址
+- `perm`：PTE 低 10 位的标志位
+
+因为一页是 4096 Bytes 即 0x1000 Bytes，故可以见到 va 分别为 `0x0 0x1000 0x2000...`。
+
+逐个解析每个 PTE 的 perm：
+
+| 虚拟地址                       | `perm` | 解释                  |
+| ------------------------------ | ------ | --------------------- |
+| `0x0`                          | `0x5B` | `V R X U A`           |
+| `0x1000`                       | `0x5B` | `V R X U A`           |
+| `0x2000`                       | `0x17` | `V R W U`             |
+| `0x3000`                       | `0x07` | `V R W`，但没有 `U`   |
+| `0x4000`                       | `0xD7` | `V R W U A D`         |
+| `0x5000`～`0x9000`             | `0`    | 不存在有效映射        |
+| `0x3FFFFF6000`～`0x3FFFFFD000` | `0`    | 不存在有效映射        |
+| `0x3FFFFFE000`                 | `0xC7` | `V R W A D`，没有 `U` |
+| `0x3FFFFFF000`                 | `0x4B` | `V R X A`，没有 `U`   |
+
+ 再考虑图 3.4：
+
+<img src="https://image.wendaining.top/image-20260727152642862.png" style="zoom:50%;" />
+
+从低位开始分析 `va 0x0`、`va 0x1000` 都是 `perm 0x5B = R-XU`，即：可读、可执行、用户可访问，不可写。那么显然，是 `text` 部分。
+
+再分析 `va 0x2000`，`perm 0x17 = R-WU` 对应可读、可写、用户可访问，不可执行，对应 `data` `R-WU`。
+
+之后分析也同理，对着看就行。而且很显然，最高的两页分别就是 trampoline 和 trapframe。
